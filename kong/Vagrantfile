@@ -1,0 +1,42 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+
+  config.vm.box = "bento/centos-7.2"
+
+  # config.vm.network "forwarded_port", guest: 80, host: 8080
+  config.vm.network "private_network", type: "dhcp"
+
+  # config.vm.provider "virtualbox" do |vb|
+  #   vb.memory = "1024"
+  # end
+
+  config.vm.provision "shell", inline: <<-SHELL
+    yum install -y --nogpgcheck epel-release
+    yum install -y --nogpgcheck https://download.postgresql.org/pub/repos/yum/9.6/redhat/rhel-7-x86_64/pgdg-redhat96-9.6-3.noarch.rpm
+    yum install -y --nogpgcheck postgresql96-server
+    /usr/pgsql-9.6/bin/postgresql96-setup initdb
+    systemctl enable postgresql-9.6.service
+    systemctl start postgresql-9.6
+    su - postgres -c "psql -c \\"CREATE USER kong PASSWORD 'kong';\\""
+    su - postgres -c "psql -c \\"CREATE DATABASE kong OWNER kong;\\""
+    su - postgres -c "psql -c \\"ALTER USER postgres with encrypted password 'postgres';\\""
+    sed -i '/^local\s*all/ s/peer/md5/' /var/lib/pgsql/9.6/data/pg_hba.conf
+    sed -i '/^host\s*all\s*all/ s/ident/md5/' /var/lib/pgsql/9.6/data/pg_hba.conf
+    systemctl restart postgresql-9.6
+    wget https://bintray.com/mashape/kong-rpm-el7-0.10.x/rpm -O bintray-mashape-kong-rpm-el7-0.10.x.repo
+    mv bintray-mashape-kong-rpm-el7-0.10.x.repo /etc/yum.repos.d/
+    yum install -y --nogpgcheck kong
+    export KONG_PG_USER=kong
+    export KONG_PG_PASSWORD=kong
+    kong start
+    # sample API config
+    curl -i -X POST --url http://localhost:8001/apis/ --data 'name=sample-api' --data 'hosts=sample-api.com' --data 'upstream_url=http://jsonplaceholder.typicode.com' --data 'uris=/posts,/comments' --data 'strip_uri=false'
+    curl -i -X POST --url http://localhost:8001/apis/sample-api/plugins/ --data 'name=key-auth'
+    curl -i -X POST --url http://localhost:8001/consumers/ --data 'username=testuser'
+    curl -i -X POST --url http://localhost:8001/consumers/testuser/key-auth/ --data 'key=SECRETAPIKEY'
+    # sample proxied API request
+    curl -i -X GET --url http://localhost:8000/posts --header 'Host: sample-api.com' --header 'apikey: SECRETAPIKEY'
+  SHELL
+end
